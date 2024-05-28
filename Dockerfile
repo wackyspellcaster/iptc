@@ -1,4 +1,14 @@
-FROM ubuntu:latest
-LABEL authors="rdelper"
+FROM golang:1.16-alpine as builder
 
-ENTRYPOINT ["top", "-b"]
+WORKDIR /app
+COPY . .
+
+RUN go build -o iptc ./cmd
+
+FROM chainguard/go:latest
+WORKDIR /root/
+COPY --from=builder /app/iptc .
+COPY .env .
+
+EXPOSE 8080
+CMD ["./iptc"]
