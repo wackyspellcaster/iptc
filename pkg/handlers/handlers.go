@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"iptc/pkg/auth"
 	"iptc/pkg/cache"
 	"iptc/pkg/logging"
@@ -21,7 +22,6 @@ func SetCache(c *cache.Cache) {
 	imageCache = c
 }
 
-// RootHandler acts as a health check endpoint and provides the status of the server
 func RootHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, err := w.Write([]byte("Image Cache Proxy is running"))
@@ -30,39 +30,60 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ProxyHandler processes requests to fetch Docker images.
-// It first attempts to retrieve the requested image from the local cache.
-// If the image is not found in the cache, it fetches the image from Docker Hub, caches it locally, and then serves the image to the client.
+type Layer struct {
+	MediaType string `json:"mediaType"`
+	Size      int64  `json:"size"`
+	Digest    string `json:"digest"`
+}
+
+type Manifest struct {
+	SchemaVersion int     `json:"schemaVersion"`
+	MediaType     string  `json:"mediaType"`
+	Config        Layer   `json:"config"`
+	Layers        []Layer `json:"layers"`
+}
+
 func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	imagePath := r.URL.Path
-	cachedImage, err := imageCache.Get(imagePath)
-	if err == nil {
-		logging.Info("Serving cached image: " + imagePath)
-		w.Header().Set("Content-Type", "application/octet-stream")
-		_, err := w.Write(cachedImage)
+
+	// Fetch the image manifest
+	manifestData, err := registry.FetchManifest(imagePath)
+	if err != nil {
+		logging.Error("Error fetching manifest: " + err.Error())
+		http.Error(w, "Manifest not found", http.StatusNotFound)
+		return
+	}
+
+	// Parse the manifest to get layer digests
+	var manifest Manifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		logging.Error("Error parsing manifest: " + err.Error())
+		http.Error(w, "Invalid manifest", http.StatusInternalServerError)
+		return
+	}
+
+	// Fetch and cache each layer
+	for _, layer := range manifest.Layers {
+		cachedLayer, err := imageCache.Get(layer.Digest)
 		if err != nil {
-			logging.Error(err.Error())
+			logging.Info("Fetching layer from Docker Hub: " + layer.Digest)
+			cachedLayer, err = registry.FetchLayer(layer.Digest, imagePath)
+			if err != nil {
+				logging.Error("Error fetching layer: " + err.Error())
+				http.Error(w, "Layer not found", http.StatusNotFound)
+				return
+			}
+			err := imageCache.Set(layer.Digest, cachedLayer)
+			if err != nil {
+				return
+			}
 		}
-		return
-	}
 
-	logging.Info("Fetching image from Docker Hub: " + imagePath)
-	upstreamImage, err := registry.Fetch(imagePath)
-	if err != nil {
-		logging.Error("Error fetching image: " + err.Error())
-		http.Error(w, "Image not found", http.StatusNotFound)
-		return
-	}
-
-	if err := imageCache.Set(imagePath, upstreamImage); err != nil {
-		logging.Error("Error caching image: " + err.Error())
-		http.Error(w, "Failed to cache image", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/octet-stream")
-	_, err = w.Write(upstreamImage)
-	if err != nil {
-		logging.Error(err.Error())
+		// Serve the cached layer to the client (simplified for example)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, err = w.Write(cachedLayer)
+		if err != nil {
+			return
+		}
 	}
 }

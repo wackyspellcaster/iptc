@@ -12,6 +12,7 @@ import (
 	"iptc/pkg/config"
 	"iptc/pkg/handlers"
 	"iptc/pkg/logging"
+	"iptc/pkg/registry"
 )
 
 func main() {
@@ -28,6 +29,7 @@ func main() {
 		logger.Fatalf("Failed to initialize newCache: %v", err)
 	}
 
+	registry.SetConfig(cfg)
 	handlers.SetCache(newCache)
 	handlers.SetDockerHubToken(cfg.DockerHubToken)
 
@@ -52,7 +54,6 @@ func main() {
 	<-quit
 	logger.Info("Server is shutting down...")
 
-	// Create a context with a 30-second timeout for the server to gracefully shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {

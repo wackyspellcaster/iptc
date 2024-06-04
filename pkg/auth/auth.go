@@ -4,7 +4,6 @@ import (
 	"net/http"
 )
 
-// These functions manage auth to set the DockerHub token in the request headers
 var dockerHubToken string
 
 func SetDockerHubToken(token string) {
